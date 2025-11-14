@@ -1,0 +1,3 @@
+Pour obtenir une attestation de scolarité, l'étudiant doit se connecter au portail étudiant.
+Depuis la rubrique Scolarité, une attestation peut être générée instantanément.
+Il est également possible de la retirer au guichet du service scolarité pendant les heures d'ouverture.

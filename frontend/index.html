@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TuniSpeak Assistant</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <h1>TuniSpeak</h1>
+    <p>Assistant Q/R trilingue (FR / AR / Darija)</p>
+    <section>
+      <label for="question">Posez votre question :</label>
+      <textarea id="question" rows="4" placeholder="Saisissez votre question ici..."></textarea>
+      <div class="speech-controls" id="speech-controls" hidden>
+        <label for="speech-lang">Langue de dictée :</label>
+        <select id="speech-lang">
+          <option value="fr-FR">Français</option>
+          <option value="ar-TN">Arabe (Tunisie)</option>
+          <option value="ar-SA">Arabe (standard)</option>
+          <option value="fr-MA">Darija (Arabizi)</option>
+        </select>
+        <div class="speech-buttons">
+          <button id="speech-start" type="button">🎤 Dicter</button>
+          <button id="speech-stop" type="button" disabled>⏹️ Stop</button>
+          <button id="speech-read" type="button" disabled>🔊 Lire la réponse</button>
+        </div>
+        <p id="speech-status" class="meta" hidden></p>
+      </div>
+      <p id="speech-unsupported" class="meta" hidden>Dictée vocale non disponible dans ce navigateur.</p>
+      <button id="ask">Envoyer</button>
+    </section>
+    <section id="response" hidden>
+      <h2>Réponse</h2>
+      <p id="meta" class="meta"></p>
+      <p id="answer"></p>
+      <p id="abstain" class="notice" hidden></p>
+      <h3>Sources</h3>
+      <ul id="sources"></ul>
+    </section>
+    <section id="feedback" hidden>
+      <h2>Feedback</h2>
+      <p class="meta">Dites-nous si la réponse vous a aidé.</p>
+      <div class="feedback-controls">
+        <button id="feedback-helpful" class="feedback-btn" type="button">👍 Utile</button>
+        <button id="feedback-unhelpful" class="feedback-btn" type="button">👎 Pas utile</button>
+      </div>
+      <label for="feedback-comment">Commentaire (optionnel)</label>
+      <textarea id="feedback-comment" rows="2" placeholder="Ajoutez un détail sur votre expérience..."></textarea>
+      <label for="feedback-correction">Réponse attendue (optionnel)</label>
+      <textarea id="feedback-correction" rows="2" placeholder="Partagez la réponse correcte si vous la connaissez..."></textarea>
+      <button id="submit-feedback" type="button">Envoyer le feedback</button>
+      <p id="feedback-status" class="meta" hidden></p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+line-length = 100
+src = ["app", "scripts", "tests"]
+
+[lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "B",
+  "W",
+  "Q",
+  "UP",
+  "N",
+]
+ignore = ["B008"]
+
+[lint.isort]
+combine-as-imports = true
+known-first-party = ["app"]

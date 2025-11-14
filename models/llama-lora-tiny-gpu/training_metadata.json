@@ -1,0 +1,14 @@
+{
+  "base_model": "models/base/tinyllama-1.1b-chat",
+  "dataset_path": "data\\faq\\dataset_finetune.jsonl",
+  "config": {
+    "max_seq_length": 512,
+    "num_train_epochs": 1.0,
+    "learning_rate": 0.0002,
+    "per_device_batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05
+  }
+}
