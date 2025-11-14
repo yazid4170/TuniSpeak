@@ -72,6 +72,8 @@ data/feedback/
 
 # Heavy model weights (not tracked)
 models/base/meta-llama-3-8b-instruct/
+models/base/tinyllama-1.1b-chat/
+models/download_errors.json
 
 # Logs
 logs/

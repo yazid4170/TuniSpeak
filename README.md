@@ -30,21 +30,25 @@ TuniSpeak is a trilingual (French, Arabic, Darija) question answering assistant 
 	```powershell
 	Copy-Item .env.example .env
 	```
-4. (Optional) Ingest raw documents and build the hybrid index:
+4. Download the required model weights (TinyLlama base, QA checkpoint, LoRA adapters):
+	```powershell
+	poetry run python scripts/download_models.py
+	```
+5. (Optional) Ingest raw documents and build the hybrid index:
 	```powershell
 	poetry run tunispeak-ingest data/raw
 	poetry run tunispeak-index
 	```
-5. Launch the API (serves both backend and frontend):
+6. Launch the API (serves both backend and frontend):
 	```powershell
 	poetry run uvicorn app.main:app --host 127.0.0.1 --port 5500
 	```
 	Then browse to `http://127.0.0.1:5500/`.
-6. Run the automated test suite:
+7. Run the automated test suite:
 	```powershell
 	poetry run pytest
 	```
-7. Evaluate QA quality against the sample dataset:
+8. Evaluate QA quality against the sample dataset:
 	```powershell
 	poetry run tunispeak-eval --dataset data/faq/mini_faq.jsonl
 	```
@@ -63,6 +67,12 @@ Copy `.env.example` to `.env` and adjust secrets:
 ```powershell
 Copy-Item .env.example .env
 ```
+
+### Model Assets
+- The TinyLlama base checkpoint is fetched on demand from the official Hugging Face repository (`TinyLlama/TinyLlama-1.1B-Chat-v1.0`).
+- Custom QA weights (`models/tunispeak-qa-sfax/`) and LoRA adapters (`models/llama-lora-tiny-gpu/`) are versioned in the repo via Git LFS, so teammates receive them automatically after cloning.
+- If the TinyLlama download fails (e.g. network interruption), re-run `poetry run python scripts/download_models.py --force` to retry.
+
 
 Generative rephrasing can now run either through Ollama or the locally fine-tuned TinyLlama adapter:
 
