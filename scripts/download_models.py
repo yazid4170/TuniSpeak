@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Iterable
 
 import typer
-from huggingface_hub import HfHubHTTPError, snapshot_download
+# FIX: older huggingface_hub doesn't have HfHubError → use universal fallback
+from huggingface_hub import snapshot_download
+
 
 DEFAULT_TINY_LLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
@@ -41,7 +43,7 @@ def _download(spec: ModelSpec, force: bool) -> bool:
             local_dir_use_symlinks=False,
             resume_download=True,
         )
-    except HfHubHTTPError as exc:
+    except Exception as exc:  # FIX: catch all errors
         typer.secho(
             f"Failed to fetch {spec.name}: {exc}", fg=typer.colors.RED, err=True
         )
