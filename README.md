@@ -34,21 +34,25 @@ TuniSpeak is a trilingual (French, Arabic, Darija) question answering assistant 
 	```powershell
 	poetry run python scripts/download_models.py
 	```
-5. (Optional) Ingest raw documents and build the hybrid index:
+5. Ingest your corpus and build the hybrid index (required for meaningful answers):
 	```powershell
 	poetry run tunispeak-ingest data/raw
 	poetry run tunispeak-index
 	```
-6. Launch the API (serves both backend and frontend):
+6. Launch the FastAPI backend:
 	```powershell
-	poetry run uvicorn app.main:app --host 127.0.0.1 --port 5500
+	poetry run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 	```
-	Then browse to `http://127.0.0.1:5500/`.
-7. Run the automated test suite:
+7. Start the Streamlit UI (talks to the API you just launched):
+	```powershell
+	poetry run streamlit run streamlit_app.py
+	```
+	Keep the FastAPI server running in another terminal, then open the Streamlit URL (defaults to `http://localhost:8501`). Use the sidebar to point it at `http://127.0.0.1:8000` if you changed the API host/port.
+8. Run the automated test suite:
 	```powershell
 	poetry run pytest
 	```
-8. Evaluate QA quality against the sample dataset:
+9. Evaluate QA quality against the sample dataset:
 	```powershell
 	poetry run tunispeak-eval --dataset data/faq/mini_faq.jsonl
 	```
@@ -110,12 +114,19 @@ Repeat the ingestion command when new documents are added, then rebuild the inde
 
 🆕 A synthetic Tunisian university QA corpus (`data/raw/dataset_final_universite_tunisie.json`) is already staged; it has been converted into retrieval chunks (`data/processed/chunks.jsonl`) and a FAQ dataset (`data/faq/dataset_final_universite_tunisie.jsonl`). Re-run `poetry run tunispeak-index` after any edits to keep the hybrid index fresh.
 
-### Development Server
-Run the API (which now also serves the frontend):
+### Development Server + UI
+Run the API (with optional hot reload):
 ```powershell
-poetry run uvicorn app.main:app --host 127.0.0.1 --port 5500
+poetry run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-Open `http://127.0.0.1:5500/` in your browser; the UI and API share the same origin, so no extra static server is required.
+
+Launch the Streamlit interface in a second terminal:
+```powershell
+poetry run streamlit run streamlit_app.py
+```
+The sidebar lets you change the backend URL, number of retrieved sources (`top_k`), and pick example prompts. The Streamlit app consumes `POST /api/v1/qa/answer` and `POST /api/v1/feedback`, so no additional wiring is required.
+
+Need to keep using the legacy static frontend? The HTML/CSS/JS bundle remains under `frontend/` and is still served by FastAPI if you hit `http://127.0.0.1:8000/`, but Streamlit is now the default experience.
 
 Need hot-reload during active development? Append `--reload`, but keep in mind it spawns an additional watcher process and can surface GPU-loading issues on Windows.
 
@@ -171,6 +182,14 @@ The command saves LoRA adapter weights and tokenizer metadata under `models/llam
 
 ### Feedback & Monitoring
 Each answer response includes an `interaction_id`; the frontend surfaces a feedback widget (helpful / not helpful, optional correction). Submissions hit `POST /api/v1/feedback` and are archived under `data/feedback/feedback.jsonl`. Calibration metrics (ECE, Brier, per-bin summaries) aggregate telemetry + feedback at `GET /api/v1/metrics/calibration`.
+
+### GPU Acceleration
+If you have a CUDA-capable GPU, install the matching PyTorch build inside the Poetry environment (e.g. `poetry run pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu124`). The `AnswerSynthesizer` and LoRA generator will automatically switch to `cuda:0` when `torch.cuda.is_available()` returns `True`. You can verify with:
+```powershell
+poetry run python -c "import torch; print('CUDA available:', torch.cuda.is_available());\
+print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
+Training scripts (`poetry run tunispeak-train`, `scripts/train_llama_lora.py`) follow the same heuristic—no additional flags are needed beyond having the CUDA wheel installed.
 
 ## Project Structure
 ```
