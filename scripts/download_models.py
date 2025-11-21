@@ -6,8 +6,11 @@ from pathlib import Path
 from typing import Iterable
 
 import typer
+
 # FIX: older huggingface_hub doesn't have HfHubError → use universal fallback
 from huggingface_hub import snapshot_download
+
+=======
 
 
 DEFAULT_TINY_LLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"

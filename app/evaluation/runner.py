@@ -89,6 +89,7 @@ class EvaluationRunner:
         confidences: list[float] = []
         correctness: list[float] = []
 
+        # Drive the production pipeline end-to-end so evaluation reflects real behaviour.
         for example in examples:
             result = self._evaluate_example(example)
             results.append(result)
@@ -130,6 +131,7 @@ class EvaluationRunner:
         results_list = list(results)
         if not results_list:
             return {}
+        # Basic numpy aggregations keep the summary JSON lightweight and script-friendly.
         em_scores = [result.em for result in results_list]
         f1_scores = [result.f1 for result in results_list]
         recall_scores = [result.recall_at_5 for result in results_list]

@@ -7,6 +7,7 @@ import difflib
 import re
 import structlog
 import unicodedata
+import torch
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer, QuestionAnsweringPipeline
 
 from app.core.config import get_settings
@@ -61,12 +62,17 @@ class ExtractiveQASystem:
     def __post_init__(self) -> None:
         self._logger = structlog.get_logger(__name__)
         settings = get_settings()
+        # Load tokenizer/model once during service boot so subsequent calls stay low-latency.
         tokenizer = self._load_tokenizer()
         model = AutoModelForQuestionAnswering.from_pretrained(self.model_name)
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model.to(device)
+        pipeline_device = 0 if device.type == "cuda" else -1
         self._pipeline = QuestionAnsweringPipeline(
             model=model,
             tokenizer=tokenizer,
             max_answer_len=64,
+            device=pipeline_device,
         )
         self._curated_prefixes = tuple(settings.retriever_curated_prefixes)
         self._curated_boost = max(0.0, float(settings.retriever_curated_boost))
@@ -96,6 +102,7 @@ class ExtractiveQASystem:
         chunks: Sequence[DocumentChunk],
         language: str | None = None,
     ) -> QAEngineResult:
+        # No retrieval hit -> immediately abstain with a language-aware message.
         if not chunks:
             message = self._resolve_abstain_message(language)
             return QAEngineResult(
@@ -111,6 +118,7 @@ class ExtractiveQASystem:
 
         threshold = self._resolve_threshold(language)
 
+        # Score each candidate chunk using the extractive QA pipeline, tracking context for post-processing.
         for idx, chunk in enumerate(chunks[: self.max_chunks]):
             context = " ".join(chunk.text.splitlines()).strip()
             if not context:
@@ -171,6 +179,7 @@ class ExtractiveQASystem:
         overlap_ratio = self._token_overlap_ratio(question, processed_answer)
         context_override_threshold: float | None = None
         context_overlap: float | None = None
+        # Overrides: for Arabic/Darija we may override abstention if answer/context strongly matches the question.
         if abstain and processed_answer:
             override_method: str | None = None
             overlap_threshold = self._resolve_overlap_threshold(language)
@@ -318,6 +327,7 @@ class ExtractiveQASystem:
     ) -> tuple[float, int, str, str] | None:
         if not candidates:
             return None
+        # Prefer answers whose tokens intersect with the question; otherwise fall back to highest-overlap context.
         significant = {
             token
             for token in re.findall(r"\w+", question.lower())

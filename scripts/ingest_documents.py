@@ -25,7 +25,7 @@ def run(directory: Path = typer.Argument(Path("data/raw"), exists=True)) -> None
 
 
 def _iter_documents(directory: Path) -> Iterable[Path]:
-    exts = {".pdf", ".docx", ".txt", ".md"}
+    exts = {".pdf", ".docx", ".txt", ".md", ".jsonl", ".json"}
     for path in directory.rglob("*"):
         if path.suffix.lower() in exts:
             yield path

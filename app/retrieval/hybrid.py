@@ -26,6 +26,7 @@ class HybridRetriever:
     def __post_init__(self) -> None:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self._settings = get_settings()
+        # Load all retrieval assets once so every request reuses the same encoder/index.
         self._encoder = get_sentence_transformer(self._settings.dense_model)
         self._chunks = self._load_chunks()
         self._curated_prefixes = tuple(self._settings.retriever_curated_prefixes)
@@ -47,6 +48,7 @@ class HybridRetriever:
         if not self._chunks:
             return []
 
+        # Score with both sparse BM25 and dense embeddings before fusing.
         bm25_scores = self._score_sparse(query)
         dense_scores = self._score_dense(query)
 
@@ -65,6 +67,7 @@ class HybridRetriever:
             candidate_chunks.append(enriched)
             candidate_scores.append(score)
 
+        # Optional cross-encoder reranker refines the top candidates when available.
         if self._reranker and candidate_chunks:
             rerank_scores = self._reranker.score(query, candidate_chunks)
             if rerank_scores.size:
@@ -98,6 +101,7 @@ class HybridRetriever:
         ]
 
     def _load_chunks(self) -> list[DocumentChunk]:
+        # Ingestion writes all chunk metadata to this JSONL file.
         chunk_path = self.data_dir / "chunks.jsonl"
         if not chunk_path.exists():
             logger.warning("retriever.missing_chunks", path=str(chunk_path))
@@ -142,6 +146,7 @@ class HybridRetriever:
         return None
 
     def _score_sparse(self, query: str) -> np.ndarray:
+        # BM25 fails gracefully by returning zeros so dense retrieval can still run.
         if not self._bm25:
             return np.zeros(len(self._chunks), dtype=float)
         tokens = tokenize_text(query)
@@ -165,6 +170,7 @@ class HybridRetriever:
         return np.dot(self._embeddings, query_vec)
 
     def _combine_scores(self, sparse: np.ndarray, dense: np.ndarray) -> np.ndarray:
+        # Require both signals; if one is missing keep output zero to trigger abstention upstream.
         if sparse.size == 0 or dense.size == 0:
             return np.zeros(len(self._chunks), dtype=float)
         sparse_norm = self._normalize(sparse)

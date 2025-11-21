@@ -17,6 +17,7 @@ class QAPipeline:
     language_detector: LanguageDetector = field(default_factory=LanguageDetector)
 
     def run(self, question: str, top_k: int = 5) -> PipelineAnswer:
+        # Retrieval first: hybrid retriever already handles BM25 + dense fusion.
         chunks = self.retriever.retrieve(question, top_k=top_k)
         if not chunks:
             return PipelineAnswer(
@@ -30,6 +31,7 @@ class QAPipeline:
         detection = self.language_detector.detect(question)
         preferred_language = detection.language if detection.language != "unknown" else None
         if preferred_language:
+            # Bias retrieval list toward user language without dropping high-scoring alternates.
             chunks = self._prioritise_language(chunks, preferred_language)
             language_filtered = self._filter_by_language(chunks, preferred_language)
             if language_filtered:
@@ -52,6 +54,7 @@ class QAPipeline:
         sources = self.retriever.to_attributions(ordered_chunks)
 
         if qa_result.abstain:
+            # When extraction abstains we still build a language-aware summary to feed the LLM.
             summary_chunks = ordered_chunks
             if preferred_language:
                 filtered = [
@@ -78,6 +81,7 @@ class QAPipeline:
                 reason=qa_result.reason or abstain_message,
             )
 
+        # Otherwise we let the generator polish the extract while keeping citations aligned.
         refined = self.synthesizer.generate(
             question=question,
             chunks=ordered_chunks,
