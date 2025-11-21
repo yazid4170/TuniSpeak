@@ -7,12 +7,53 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main>
-    <h1>TuniSpeak</h1>
-    <p>Assistant Q/R trilingue (FR / AR / Darija)</p>
-    <section>
-      <label for="question">Posez votre question :</label>
-      <textarea id="question" rows="4" placeholder="Saisissez votre question ici..."></textarea>
+  <header class="site-nav shell">
+    <div class="brand">
+      <span class="logo-mark">TS</span>
+      <div>
+        <p class="logo-title">TuniSpeak</p>
+        <p class="logo-sub">Desk étudiant trilingue</p>
+      </div>
+    </div>
+    <div class="nav-actions">
+      <span class="pill">FR · AR · Darija</span>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Basculer le thème">🌙</button>
+    </div>
+  </header>
+  <section class="hero shell">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">Campus Helpdesk</p>
+        <h1>Vos démarches étudiantes expliquées simplement.</h1>
+        <p class="lede">TuniSpeak retrouve, vérifie et synthétise les informations officielles en français, arabe ou darija pour vous orienter rapidement.</p>
+        <div class="hero-actions">
+          <a class="primary" href="#ask-panel">Poser une question</a>
+          <span class="hero-note">Latence moyenne &lt; 2s · Citations garanties</span>
+        </div>
+        <ul class="hero-stats">
+          <li><strong>3</strong><span>Langues détectées</span></li>
+          <li><strong>5</strong><span>Sources max</span></li>
+          <li><strong>0.87</strong><span>Score confiance</span></li>
+        </ul>
+      </div>
+      <div class="hero-preview">
+        <p class="preview-label">Exemple</p>
+        <div class="preview-card">
+          <div class="bubble user">J'ai raté la date d'inscription, que faire ?</div>
+          <div class="bubble assistant">Un dossier de demande tardive est accepté jusqu'à J+10 avec justificatif. Dépose-le auprès du service scolarité avec le formulaire B12 signé.</div>
+          <div class="bubble assistant light">Sources: Règlement scolarité 2024 · FAQ inscription</div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <main class="shell layout">
+    <section class="ask card" id="ask-panel">
+      <label for="question">Posez votre question</label>
+      <textarea id="question" rows="4" placeholder="Ex: Comment demander une attestation d'inscription ?"></textarea>
+      <div class="input-meta">
+        <span id="char-count" class="meta">0 caractères</span>
+        <span class="hint">Astuce: Ctrl+Entrée pour envoyer</span>
+      </div>
       <div class="speech-controls" id="speech-controls" hidden>
         <label for="speech-lang">Langue de dictée :</label>
         <select id="speech-lang">
@@ -29,17 +70,34 @@
         <p id="speech-status" class="meta" hidden></p>
       </div>
       <p id="speech-unsupported" class="meta" hidden>Dictée vocale non disponible dans ce navigateur.</p>
-      <button id="ask">Envoyer</button>
+      <div class="actions">
+        <button id="ask" class="primary" disabled>
+          <span class="spinner" aria-hidden="true"></span>
+          <span class="btn-label">Envoyer</span>
+        </button>
+      </div>
     </section>
-    <section id="response" hidden>
+    <section class="examples card" aria-label="Exemples de questions">
+      <h2>Exemples</h2>
+      <div class="examples-grid">
+        <button class="example-btn" data-example="Quels sont les délais pour l'inscription tardive ?">Inscription tardive</button>
+        <button class="example-btn" data-example="Comment obtenir une attestation de réussite ?">Attestation de réussite</button>
+        <button class="example-btn" data-example="شنو يلزمني باش نبدل الشعبة؟">Changer de filière (Darija)</button>
+        <button class="example-btn" data-example="ما هي الوثائق اللازمة للتسجيل؟">Documents d'inscription (AR)</button>
+      </div>
+    </section>
+    <section id="response" class="card" hidden>
       <h2>Réponse</h2>
       <p id="meta" class="meta"></p>
-      <p id="answer"></p>
+      <div class="answer-row">
+        <p id="answer"></p>
+        <button id="copy-answer" class="secondary" type="button" aria-label="Copier la réponse">📋 Copier</button>
+      </div>
       <p id="abstain" class="notice" hidden></p>
       <h3>Sources</h3>
       <ul id="sources"></ul>
     </section>
-    <section id="feedback" hidden>
+    <section id="feedback" class="card" hidden>
       <h2>Feedback</h2>
       <p class="meta">Dites-nous si la réponse vous a aidé.</p>
       <div class="feedback-controls">
@@ -54,6 +112,9 @@
       <p id="feedback-status" class="meta" hidden></p>
     </section>
   </main>
+  <footer class="site-footer">
+    <p class="meta">Propulsé par FastAPI • RAG multilingue avec citations</p>
+  </footer>
   <script src="app.js"></script>
 </body>
 </html>

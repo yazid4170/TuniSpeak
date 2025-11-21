@@ -10,6 +10,42 @@ let speechRecognition = null;
 let isListening = false;
 let speechSynthesisSupported = false;
 
+function setLoading(isLoading) {
+  const askBtn = document.getElementById("ask");
+  if (!askBtn) return;
+  askBtn.disabled = isLoading;
+  if (isLoading) {
+    askBtn.classList.add("loading");
+  } else {
+    askBtn.classList.remove("loading");
+  }
+}
+
+function updateCharCount() {
+  const textarea = document.getElementById("question");
+  const counter = document.getElementById("char-count");
+  if (!textarea || !counter) return;
+  const len = textarea.value.length;
+  counter.textContent = `${len} caractère${len > 1 ? "s" : ""}`;
+}
+
+function updateAskDisabled() {
+  const askBtn = document.getElementById("ask");
+  const textarea = document.getElementById("question");
+  if (!askBtn || !textarea) return;
+  askBtn.disabled = !textarea.value.trim();
+}
+
+function isRTLText(s) {
+  // Basic detection for Arabic script
+  return /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(s);
+}
+
+function applyDir(node, rtl) {
+  if (!node) return;
+  node.setAttribute("dir", rtl ? "rtl" : "ltr");
+}
+
 function toggleSpeechButtons(listening) {
   const startBtn = document.getElementById("speech-start");
   const stopBtn = document.getElementById("speech-stop");
@@ -185,11 +221,16 @@ async function askQuestion() {
   }
   updateSpeechStatus(null);
   const payload = {
-    question: questionInput.value,
+    question: questionInput.value.trim(),
     top_k: 5,
   };
 
   try {
+    setLoading(true);
+    if (!payload.question) {
+      setLoading(false);
+      return;
+    }
     const response = await fetch(`${QA_URL}/answer`, {
       method: "POST",
       headers: {
@@ -205,6 +246,7 @@ async function askQuestion() {
 
     const result = await response.json();
     answerNode.textContent = result.answer;
+    applyDir(answerNode, result.language && (result.language === "ar" || result.language === "aeb"));
     const confidencePercent = ((result.confidence || 0) * 100).toFixed(1);
     const normalized = result.normalized_query || payload.question;
     const normalizedLabel =
@@ -221,11 +263,28 @@ async function askQuestion() {
     }
     sourcesNode.innerHTML = "";
     result.sources.forEach((source) => {
-      const item = document.createElement("li");
-      const scoreLabel =
-        typeof source.score === "number" ? source.score.toFixed(3) : "N/A";
-      item.textContent = `${source.title || source.document_id} – score: ${scoreLabel}`;
-      sourcesNode.appendChild(item);
+      const li = document.createElement("li");
+      li.className = "source-card";
+      const title = document.createElement("div");
+      title.className = "source-title";
+      title.textContent = source.title || source.document_id || "Source";
+      const scoreWrap = document.createElement("div");
+      scoreWrap.className = "score-wrap";
+      const scoreBar = document.createElement("div");
+      scoreBar.className = "score-bar";
+      const fill = document.createElement("div");
+      fill.className = "score-fill";
+      const score = typeof source.score === "number" ? source.score : 0;
+      const pct = Math.max(0, Math.min(100, Math.round(score * 100)));
+      fill.style.width = `${pct}%`;
+      const label = document.createElement("span");
+      label.textContent = `score ${score.toFixed ? score.toFixed(3) : score}`;
+      scoreBar.appendChild(fill);
+      scoreWrap.appendChild(scoreBar);
+      scoreWrap.appendChild(label);
+      li.appendChild(title);
+      li.appendChild(scoreWrap);
+      sourcesNode.appendChild(li);
     });
     responsePanel.hidden = false;
     currentInteractionId = result.interaction_id;
@@ -248,6 +307,8 @@ async function askQuestion() {
     noticeNode.textContent = "";
     responsePanel.hidden = false;
     resetFeedback();
+  } finally {
+    setLoading(false);
   }
 }
 
@@ -324,4 +385,76 @@ if (readBtn) {
   readBtn.addEventListener("click", readAnswerAloud);
 }
 
+// UX wiring: character counter, keyboard shortcuts, examples
+function initializeUX() {
+  const textarea = document.getElementById("question");
+  if (textarea) {
+    textarea.addEventListener("input", updateCharCount);
+    textarea.addEventListener("input", updateAskDisabled);
+    textarea.addEventListener("keydown", (e) => {
+      const isSubmitCombo = (e.ctrlKey || e.metaKey) && e.key === "Enter";
+      if (isSubmitCombo) {
+        e.preventDefault();
+        askQuestion();
+      }
+    });
+    updateCharCount();
+    updateAskDisabled();
+    // Auto RTL for Arabic input
+    textarea.addEventListener("input", () => applyDir(textarea, isRTLText(textarea.value)));
+  }
+
+  document.querySelectorAll(".example-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const text = btn.getAttribute("data-example") || "";
+      if (textarea) {
+        textarea.value = text;
+        updateCharCount();
+        updateAskDisabled();
+        applyDir(textarea, isRTLText(text));
+      }
+      askQuestion();
+    });
+  });
+
+  const copyBtn = document.getElementById("copy-answer");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      const answerNode = document.getElementById("answer");
+      const text = answerNode?.textContent || "";
+      if (!text) return;
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          copyBtn.textContent = "✅ Copié";
+          setTimeout(() => (copyBtn.textContent = "📋 Copier"), 1200);
+        } else {
+          const area = document.createElement("textarea");
+          area.value = text; document.body.appendChild(area); area.select();
+          document.execCommand("copy"); document.body.removeChild(area);
+        }
+      } catch (_) {
+        // ignore
+      }
+    });
+  }
+
+  const themeToggle = document.getElementById("theme-toggle");
+  const savedTheme = localStorage.getItem("tunispeak.theme");
+  if (savedTheme) {
+    document.body.setAttribute("data-theme", savedTheme);
+  }
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const current = document.body.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      document.body.setAttribute("data-theme", current);
+      localStorage.setItem("tunispeak.theme", current);
+      themeToggle.textContent = current === "dark" ? "☀️" : "🌙";
+    });
+    // initialize icon
+    themeToggle.textContent = (document.body.getAttribute("data-theme") === "dark") ? "☀️" : "🌙";
+  }
+}
+
 initializeSpeech();
+initializeUX();
