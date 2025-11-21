@@ -29,6 +29,7 @@ class TelemetryLogger:
         resolved_path = Path(path) if path is not None else Path(settings.telemetry_log_path)
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = resolved_path
+        # File writes are shared across FastAPI workers, so guard them with a lock.
         self._lock = threading.Lock()
 
     @property
@@ -74,6 +75,7 @@ class TelemetryLogger:
             for line in handle:
                 if not line.strip():
                     continue
+                # Lazy-load JSON lines so dashboards can stream large logs without RAM spikes.
                 data = json.loads(line)
                 yield TelemetryRecord(
                     interaction_id=data["interaction_id"],

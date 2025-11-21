@@ -46,6 +46,7 @@ class AnswerSynthesizer:
         self._local_tokenizer: PreTrainedTokenizerBase | None = None
         self._local_model: PreTrainedModel | None = None
 
+        # Prefer a local LoRA adapter if the checkpoints are available on disk.
         if settings.generative_lora_base and settings.generative_lora_adapter:
             self._initialise_local_generator(
                 base_path=Path(settings.generative_lora_base),
@@ -71,6 +72,7 @@ class AnswerSynthesizer:
         top_chunks: list[DocumentChunk] = list(chunks)
         if not top_chunks:
             return "Aucune réponse trouvée."
+        # Fast extractive summary gives the user *something* even if generation is disabled.
         sentences_pool: list[str] = []
         for chunk in top_chunks[:3]:
             sentences_pool.extend(sentences(chunk.text)[:3])
@@ -89,6 +91,7 @@ class AnswerSynthesizer:
         context = self._build_context(chunks)
         if not context:
             return None
+        # System prompt switches by language so citations + tone match the question.
         system_prompt = (
             "Tu es un assistant universitaire bénévole. Réponds de manière concise, "
             "structurée et en citant les sources entre crochets (ex. [Source 1]). "
@@ -121,6 +124,7 @@ class AnswerSynthesizer:
         prompt = "\n".join(prompt_sections).strip()
 
         if self._allow_generative and self._local_model and self._local_tokenizer:
+            # First attempt is offline to avoid latency and data leakage.
             generated = self._generate_with_local_model(system_prompt, prompt)
             if generated and self._is_rewrite_acceptable(draft, generated, question):
                 self._logger.info("synthesizer.generative_success", backend="local")
@@ -129,6 +133,7 @@ class AnswerSynthesizer:
                 self._logger.info("synthesizer.generative_reject", backend="local")
 
         if self._allow_generative and self._ollama:
+            # Ollama serves as remote fallback when local weights are missing.
             generated = self._ollama.generate(prompt=prompt, system_prompt=system_prompt)
             if generated and self._is_rewrite_acceptable(draft, generated, question):
                 self._logger.info("synthesizer.generative_success", backend="ollama")
@@ -141,6 +146,7 @@ class AnswerSynthesizer:
     def _build_context(self, chunks: Sequence[DocumentChunk]) -> str:
         if not chunks:
             return ""
+        # Cap the prompt budget so llama-based models stay within VRAM constraints.
         budget = max(200, self._max_context_chars)
         collected: list[str] = []
         used = 0
@@ -224,6 +230,7 @@ class AnswerSynthesizer:
     ) -> bool:
         if not generated:
             return False
+        # Reject outputs that look like a prompt leak or are too far from the draft.
         if "<|" in generated or "|>" in generated:
             return False
         if draft:

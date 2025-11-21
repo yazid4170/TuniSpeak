@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Iterable
 
 import typer
-from huggingface_hub import HfHubHTTPError, snapshot_download
+from huggingface_hub import snapshot_download
+from huggingface_hub.utils import HfHubHTTPError
 
 DEFAULT_TINY_LLAMA_REPO = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 

@@ -60,6 +60,7 @@ class LanguageDetector:
         if not cleaned:
             return LanguageDetectionResult(language="unknown", normalized="", confidence=0.0)
 
+        # Quick heuristics catch Tunisian dialect patterns before slower langdetect guesswork.
         looks_like_arabizi = self._looks_like_arabizi(cleaned)
         has_arabic_script = self._has_arabic_script(cleaned)
         has_latin_letters = bool(re.search(r"[A-Za-z]", cleaned))
@@ -90,6 +91,7 @@ class LanguageDetector:
 
         normalized = cleaned
 
+        # Map Darija variants to single code and normalise text so downstream ranking is consistent.
         if lang == "ar":
             normalized = self._normalise_arabic(cleaned)
         if lang in TUNISIAN_DARIJA_CODES:

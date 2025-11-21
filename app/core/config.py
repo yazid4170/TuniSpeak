@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     generative_do_sample: bool = Field(default=True)
     generative_repetition_penalty: float = Field(default=1.05)
     ollama_base_url: str = Field(default="http://localhost:11434")
+    speech_model_size: str = Field(default="small")
+    speech_device: str | None = Field(default=None)
+    speech_enable_tts: bool = Field(default=True)
+    speech_tts_default_language: str = Field(default="fr")
+    speech_tts_language_map: dict[str, str] = Field(
+        default_factory=lambda: {"fr": "fr", "ar": "ar", "aeb": "ar", "en": "en"}
+    )
 
     eval_output_dir: str = Field(default="./data/processed/eval")
     telemetry_log_path: str = Field(default="./data/processed/eval/history.jsonl")

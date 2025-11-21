@@ -48,6 +48,12 @@ class AnswerResponse(BaseModel):
     interaction_id: str
 
 
+class SpeechAnswerResponse(AnswerResponse):
+    transcript: str
+    transcript_language: str | None = None
+    audio_base64: str | None = None
+
+
 class FeedbackRequest(BaseModel):
     interaction_id: str = Field(..., min_length=8)
     rating: Literal["helpful", "unhelpful"]
