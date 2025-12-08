@@ -148,7 +148,7 @@ async def voice_answer(
         sources=[source.document_id for source in answer.sources],
     )
 
-        # gTTS returns raw MP3 bytes; encode in base64 for the HTTP response payload.
+    # gTTS returns raw MP3 bytes; encode in base64 for the HTTP response payload.
     audio_reply = speech.synthesize(answer.answer, language=detected.language)
     encoded_audio = base64.b64encode(audio_reply).decode("ascii") if audio_reply else None
 

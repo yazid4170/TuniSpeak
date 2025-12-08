@@ -4,11 +4,45 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 import difflib
+import os
 import re
 import structlog
+import sys
+import types
 import unicodedata
+from enum import Enum
+
+os.environ.setdefault("TRANSFORMERS_NO_TORCHVISION", "1")
+os.environ.setdefault("DISABLE_TRANSFORMERS_IMAGE_FEATURES", "1")
+os.environ.setdefault("DISABLE_TRANSFORMERS_IMAGE_IMPORTS", "1")
+os.environ.setdefault("DISABLE_TRANSFORMERS_AUDIO_IMPORTS", "1")
+
+if "torchvision" not in sys.modules:  # pragma: no cover
+    torchvision_stub = types.ModuleType("torchvision")
+    transforms_stub = types.ModuleType("torchvision.transforms")
+
+    class _InterpolationMode(Enum):
+        NEAREST = 0
+        BILINEAR = 2
+        BICUBIC = 3
+        LANCZOS = 4
+        BOX = 5
+        HAMMING = 6
+
+    transforms_stub.InterpolationMode = _InterpolationMode
+    torchvision_stub.transforms = transforms_stub
+    v2_stub = types.ModuleType("torchvision.transforms.v2")
+    v2_functional = types.ModuleType("torchvision.transforms.v2.functional")
+    v2_stub.functional = v2_functional
+    sys.modules["torchvision.transforms.v2"] = v2_stub
+    sys.modules["torchvision.transforms.v2.functional"] = v2_functional
+    for submodule in ("datasets", "io", "models", "ops", "utils", "_meta_registrations"):
+        sys.modules[f"torchvision.{submodule}"] = types.ModuleType(f"torchvision.{submodule}")
+    sys.modules["torchvision"] = torchvision_stub
+    sys.modules["torchvision.transforms"] = transforms_stub
+
 import torch
-from transformers import AutoModelForQuestionAnswering, AutoTokenizer, QuestionAnsweringPipeline
+from transformers import AutoModelForQuestionAnswering, AutoTokenizer
 
 from app.core.config import get_settings
 from app.models.schemas import DocumentChunk
@@ -63,17 +97,12 @@ class ExtractiveQASystem:
         self._logger = structlog.get_logger(__name__)
         settings = get_settings()
         # Load tokenizer/model once during service boot so subsequent calls stay low-latency.
-        tokenizer = self._load_tokenizer()
-        model = AutoModelForQuestionAnswering.from_pretrained(self.model_name)
-        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        model.to(device)
-        pipeline_device = 0 if device.type == "cuda" else -1
-        self._pipeline = QuestionAnsweringPipeline(
-            model=model,
-            tokenizer=tokenizer,
-            max_answer_len=64,
-            device=pipeline_device,
-        )
+        self._tokenizer = self._load_tokenizer()
+        self._model = AutoModelForQuestionAnswering.from_pretrained(self.model_name)
+        self._device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        self._model.to(self._device)
+        self._model.eval()
+        self._max_answer_len = 64
         self._curated_prefixes = tuple(settings.retriever_curated_prefixes)
         self._curated_boost = max(0.0, float(settings.retriever_curated_boost))
 
@@ -124,7 +153,7 @@ class ExtractiveQASystem:
             if not context:
                 continue
             try:
-                result = self._pipeline(question=question, context=context)
+                result = self._run_qa_model(question=question, context=context)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self._logger.warning(
                     "qa.inference_failed",
@@ -224,6 +253,57 @@ class ExtractiveQASystem:
             abstain=abstain,
             reason=reason,
         )
+
+    def _run_qa_model(self, question: str, context: str) -> dict[str, float | str]:
+        if not question.strip() or not context.strip():
+            return {"answer": "", "score": 0.0}
+
+        encoded = self._tokenizer(
+            question,
+            context,
+            return_tensors="pt",
+            truncation=True,
+            max_length=min(512, getattr(self._tokenizer, "model_max_length", 512)),
+            return_offsets_mapping=True,
+        )
+        sequence_ids = encoded.sequence_ids(0) if hasattr(encoded, "sequence_ids") else None
+        offset_mapping = encoded.pop("offset_mapping", None)
+        inputs = {key: value.to(self._device) for key, value in encoded.items()}
+
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+
+        start_logits = outputs.start_logits[0]
+        end_logits = outputs.end_logits[0]
+
+        if sequence_ids:
+            mask = torch.tensor(
+                [0.0 if seq_id == 1 else float("-inf") for seq_id in sequence_ids],
+                device=self._device,
+            )
+            start_logits = start_logits + mask
+            end_logits = end_logits + mask
+
+        start_index = int(torch.argmax(start_logits).item())
+        end_index = int(torch.argmax(end_logits).item())
+
+        if end_index < start_index:
+            return {"answer": "", "score": 0.0}
+        if end_index - start_index + 1 > self._max_answer_len:
+            return {"answer": "", "score": 0.0}
+
+        start_probs = torch.nn.functional.softmax(start_logits, dim=-1)
+        end_probs = torch.nn.functional.softmax(end_logits, dim=-1)
+        score = float(start_probs[start_index].item() * end_probs[end_index].item())
+
+        input_ids = inputs["input_ids"][0]
+        answer_ids = input_ids[start_index : end_index + 1]
+        answer = self._tokenizer.decode(answer_ids, skip_special_tokens=True)
+
+        if not answer.strip():
+            return {"answer": "", "score": 0.0}
+
+        return {"answer": answer.strip(), "score": score}
 
     def _resolve_threshold(self, language: str | None) -> float:
         if not language:

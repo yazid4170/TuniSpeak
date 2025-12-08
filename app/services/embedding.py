@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from app.utils.torchvision_stub import ensure_torchvision_stub
+
+ensure_torchvision_stub()
+
 from sentence_transformers import SentenceTransformer
 
 

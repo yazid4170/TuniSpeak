@@ -4,21 +4,26 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import httpx
-import torch
-import structlog
-from peft import PeftModel
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedModel,
-    PreTrainedTokenizerBase,
-)
 import re
+import structlog
+import torch
+from peft import PeftModel
+
+from app.utils.torchvision_stub import ensure_torchvision_stub
 
 from app.core.config import get_settings
 from app.models.schemas import DocumentChunk
 from app.services.ollama import OllamaClient
 from app.utils.text import sentences
+
+ensure_torchvision_stub()
+
+from transformers import (  # noqa: E402  # import after stub ensures safe lazy load
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
 
 
 ROLE_TOKENS = {

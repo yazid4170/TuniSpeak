@@ -43,6 +43,8 @@ huggingface-hub = "^0.36.0"
 faster-whisper = "^1.0.3"
 gtts = "^2.5.4"
 streamlit = "^1.39.0"
+soundfile = "^0.12.1"
+streamlit-webrtc = "^0.47.6"
 
 
 [tool.poetry.group.dev.dependencies]
