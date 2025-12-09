@@ -17,6 +17,7 @@ ROMANIZED_DARIJA_MARKERS = {
     "kifach",
     "kifech",
     "chno",
+    "chnoa",
     "shnu",
     "chnou",
     "shnou",
@@ -27,9 +28,13 @@ ROMANIZED_DARIJA_MARKERS = {
     "mawjoud",
     "nsajel",
     "bech",
+    "bach",
     "fel",
     "ena",
     "inti",
+    "lazimni",
+    "lazemni",
+    "nbadel",
 }
 ROMANIZED_DARIJA_STRONG_MARKERS = {
     "kifeh",
@@ -37,6 +42,7 @@ ROMANIZED_DARIJA_STRONG_MARKERS = {
     "kifach",
     "kifech",
     "chno",
+    "chnoa",
     "shnu",
     "chnou",
     "shnou",
@@ -45,6 +51,10 @@ ROMANIZED_DARIJA_STRONG_MARKERS = {
     "mouch",
     "nsajel",
     "bech",
+    "bach",
+    "lazimni",
+    "lazemni",
+    "nbadel",
 }
 
 

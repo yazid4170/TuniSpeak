@@ -1,14 +1,11 @@
 """Streamlit interface for the TuniSpeak QA assistant."""
 from __future__ import annotations
 
-
-"""Streamlit interface for the TuniSpeak QA assistant."""
-from __future__ import annotations
-
 import base64
 import html
 import os
 import queue
+import time
 from collections import deque
 from io import BytesIO
 from pathlib import Path
@@ -16,6 +13,7 @@ from typing import Any
 
 import httpx
 import numpy as np
+import pandas as pd
 import soundfile as sf
 import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
@@ -30,6 +28,202 @@ EXAMPLES = [
 RTC_CONFIGURATION = {"iceServers": []}
 MAX_VOICE_HISTORY = 5
 MAX_VOICE_SECONDS = 30
+DEFAULT_COMPLEXITY = "Bronze"
+COMPLEXITY_LEVELS: dict[str, dict[str, Any]] = {
+    "Bronze": {
+        "label": "🥉 Bronze",
+        "pipeline": "TF-IDF + QA extractif",
+        "description": "Baseline end-to-end avec réponse concise et feedback rapide.",
+        "top_k": 3,
+        "show_metrics": False,
+        "show_normalized": False,
+        "show_sources": False,
+        "max_sources": 0,
+        "show_feedback": True,
+        "voice_enabled": False,
+    },
+    "Silver": {
+        "label": "🥈 Silver",
+        "pipeline": "Dense retrieval + reranking",
+        "description": "Ajoute reranking dense et feedback contextualisé.",
+        "top_k": 5,
+        "show_metrics": True,
+        "show_normalized": False,
+        "show_sources": True,
+        "max_sources": 3,
+        "show_feedback": True,
+        "voice_enabled": False,
+    },
+    "Gold": {
+        "label": "🥇 Gold",
+        "pipeline": "Encodeur multilingue fine-tuné",
+        "description": "Adaptation domaine + métriques complètes et feedback.",
+        "top_k": 7,
+        "show_metrics": True,
+        "show_normalized": True,
+        "show_sources": True,
+        "max_sources": None,
+        "show_feedback": True,
+        "voice_enabled": False,
+    },
+    "Platinum": {
+        "label": "💎 Platinum",
+        "pipeline": "RAG distillé + calibration",
+        "description": "Expérience complète avec calibration, abstention et voix.",
+        "top_k": 10,
+        "show_metrics": True,
+        "show_normalized": True,
+        "show_sources": True,
+        "max_sources": None,
+        "show_feedback": True,
+        "voice_enabled": True,
+    },
+}
+
+
+def render_complexity_static_overview(selected_level: str) -> None:
+    rows: list[dict[str, Any]] = []
+    for key, cfg in COMPLEXITY_LEVELS.items():
+        rows.append(
+            {
+                "Niveau": cfg["label"],
+                "Pipeline": cfg.get("pipeline", "—"),
+                "Top-k": cfg["top_k"],
+                "Sources": "✅" if cfg["show_sources"] else "—",
+                "Métriques": "✅" if cfg["show_metrics"] else "—",
+                "Feedback": "✅" if cfg["show_feedback"] else "—",
+                "Voix": "✅" if cfg["voice_enabled"] else "—",
+                "Description": cfg["description"],
+            }
+        )
+
+    df = pd.DataFrame(rows, index=COMPLEXITY_LEVELS.keys())
+    df.index.name = "Mode"
+
+    styled = df.style.apply(
+        lambda row: [
+            "background-color: rgba(16, 58, 113, 0.12)" if row.name == selected_level else ""
+            for _ in row
+        ],
+        axis=1,
+    )
+
+    st.dataframe(styled, use_container_width=True)
+
+
+# Execute the QA endpoint for a specific complexity mode and collect timing metadata.
+def evaluate_complexity_level(
+    qa_url: str,
+    question: str,
+    level_key: str,
+    config: dict[str, Any],
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    start = time.perf_counter()
+    payload = {
+        "question": question,
+        "top_k": config.get("top_k", 5),
+    }
+    if client is None:
+        response = call_api(qa_url, payload)
+    else:
+        http_response = client.post(qa_url, json=payload)
+        http_response.raise_for_status()
+        response = http_response.json()
+    latency_ms = (time.perf_counter() - start) * 1000
+    return {
+        "ok": True,
+        "data": response,
+        "latency_ms": latency_ms,
+        "used_top_k": payload["top_k"],
+        "level": level_key,
+    }
+
+# Render a comparison grid showing live metrics for every complexity level.
+def render_complexity_metrics(
+    results: dict[str, dict[str, Any]] | None,
+    selected_level: str,
+    available_only: bool = False,
+) -> None:
+    if not results:
+        st.info("Posez une question pour comparer les niveaux de complexité.")
+        return
+
+    rows: list[dict[str, Any]] = []
+    keys = results.keys() if available_only else COMPLEXITY_LEVELS.keys()
+    for key in keys:
+        cfg = COMPLEXITY_LEVELS[key]
+        entry = (results or {}).get(key)
+        base_row: dict[str, Any] = {
+            "Niveau": cfg["label"],
+            "Pipeline": cfg.get("pipeline", "—"),
+            "Top-k": (entry or {}).get("used_top_k", cfg.get("top_k")),
+            "Sélection": "⭐" if key == selected_level else "",
+        }
+        if not entry:
+            base_row.update(
+                {
+                    "Confiance": "—",
+                    "Sources": "—",
+                    "Langue": "—",
+                    "Abstention": "—",
+                    "Latence (ms)": "—",
+                    "Longueur": "—",
+                    "Statut": "En attente",
+                }
+            )
+        elif not entry.get("ok"):
+            base_row.update(
+                {
+                    "Confiance": "—",
+                    "Sources": "—",
+                    "Langue": "—",
+                    "Abstention": "—",
+                    "Latence (ms)": "—",
+                    "Longueur": "—",
+                    "Statut": entry.get("error", "Erreur"),
+                }
+            )
+        else:
+            data = entry.get("data", {})
+            sources = data.get("sources") or []
+            confidence = data.get("confidence")
+            conf_display = (
+                f"{confidence * 100:.1f}%"
+                if isinstance(confidence, (int, float))
+                else "N/A"
+            )
+            latency_ms = entry.get("latency_ms")
+            latency_display = (
+                f"{latency_ms:.0f}"
+                if isinstance(latency_ms, (int, float))
+                else "N/A"
+            )
+            base_row.update(
+                {
+                    "Confiance": conf_display,
+                    "Sources": len(sources),
+                    "Langue": (data.get("language") or "-").upper(),
+                    "Abstention": "✅" if data.get("abstain") else "—",
+                    "Latence (ms)": latency_display,
+                    "Longueur": len((data.get("answer") or "").strip()),
+                    "Statut": "OK",
+                }
+            )
+        rows.append(base_row)
+
+    df = pd.DataFrame(rows, index=list(keys))
+    df.index.name = "Mode"
+
+    styled = df.style.apply(
+        lambda row: [
+            "background-color: rgba(16, 58, 113, 0.12)" if row.name == selected_level else ""
+            for _ in row
+        ],
+        axis=1,
+    )
+
+    st.dataframe(styled, use_container_width=True)
 
 
 def ensure_voice_state() -> None:
@@ -130,6 +324,58 @@ def send_feedback(url: str, payload: dict[str, Any]) -> None:
         response.raise_for_status()
 
 
+def render_feedback_form(endpoint: str, interaction_id: str, form_key: str) -> None:
+    if not interaction_id:
+        st.info("Identifiant de l'interaction indisponible pour le feedback.")
+        return
+
+    submissions: dict[str, bool] = st.session_state.setdefault("feedback_submissions", {})
+    if submissions.get(interaction_id):
+        st.success("✅ Merci pour votre retour !")
+        return
+
+    rating_options = ("helpful", "unhelpful")
+    prefix = form_key.replace(" ", "-")
+    form_id = f"feedback-form-{prefix}-{interaction_id}"
+
+    with st.form(form_id):
+        rating = st.radio(
+            "Cette réponse vous a-t-elle aidé ?",
+            rating_options,
+            index=0,
+            format_func=lambda x: "👍 Oui" if x == "helpful" else "👎 Non",
+            key=f"radio-{form_id}",
+        )
+        comment = st.text_area(
+            "Commentaire (optionnel)",
+            height=80,
+            key=f"comment-{form_id}",
+        )
+        correction = st.text_area(
+            "Suggestion de réponse (optionnel)",
+            height=80,
+            key=f"correction-{form_id}",
+        )
+        submitted = st.form_submit_button("📤 Envoyer le feedback", use_container_width=True)
+
+    if submitted:
+        payload = {
+            "interaction_id": interaction_id,
+            "rating": rating,
+            "comment": comment.strip() or None,
+            "correction": correction.strip() or None,
+        }
+        try:
+            with st.spinner("Envoi en cours..."):
+                send_feedback(endpoint, payload)
+            submissions[interaction_id] = True
+            st.success("✅ Merci pour votre retour !")
+        except httpx.HTTPStatusError as exc:
+            st.error(f"❌ Erreur: {exc.response.text}")
+        except httpx.RequestError as exc:
+            st.error(f"❌ Connexion impossible: {exc}")
+
+
 def render_sources(sources: list[dict[str, Any]]) -> None:
     if not sources:
         st.info("Aucune source fournie.")
@@ -137,15 +383,41 @@ def render_sources(sources: list[dict[str, Any]]) -> None:
     for idx, source in enumerate(sources, 1):
         title = source.get("title") or source.get("document_id", "Source")
         score = source.get("score")
-        snippet = source.get("snippet") or source.get("text")
+        snippet = source.get("snippet") or source.get("text") or ""
+        document_id = source.get("document_id")
+        url = source.get("url")
 
-        with st.container():
-            st.markdown(f"**{idx}. {title}**")
-            if isinstance(score, (int, float)):
-                st.caption(f"Score de pertinence: {score:.3f}")
-            if snippet:
-                st.markdown(f"> {snippet}")
-            st.markdown("---")
+        snippet_html = html.escape(snippet).replace("\n", "<br>")
+        title_html = html.escape(str(title))
+        document_html = html.escape(str(document_id)) if document_id else ""
+        score_html = (
+            f'<div class="source-score">Score: {score:.3f}</div>'
+            if isinstance(score, (int, float))
+            else ""
+        )
+        url_html = (
+            f'<a href="{html.escape(url)}" target="_blank" class="source-link">Ouvrir le document</a>'
+            if url
+            else ""
+        )
+
+        st.markdown(
+            f"""
+            <div class="source-card">
+                <div class="source-header">
+                    <div class="source-index">{idx}</div>
+                    <div class="source-meta">
+                        <div class="source-title">{title_html}</div>
+                        {'<div class="source-doc">' + document_html + '</div>' if document_html else ''}
+                        {url_html}
+                    </div>
+                    {score_html}
+                </div>
+                <div class="source-snippet">{snippet_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 CUSTOM_CSS = """
@@ -169,6 +441,18 @@ CUSTOM_CSS = """
 /* Base Styles */
 .stApp {
     background-color: var(--bg-light);
+}
+
+body, .stApp, .stApp p, .stApp span, .stApp label {
+    color: var(--text-dark);
+}
+
+.stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li {
+    color: var(--text-dark) !important;
+}
+
+.stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5, .stMarkdown h6 {
+    color: var(--text-dark) !important;
 }
 
 /* Streamlit native header */
@@ -312,6 +596,83 @@ CUSTOM_CSS = """
     color: var(--text-dark);
 }
 
+.source-card {
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.source-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.source-index {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--primary-blue);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.source-meta {
+    flex: 1;
+}
+
+.source-title {
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text-dark);
+    margin-bottom: 2px;
+}
+
+.source-doc {
+    font-size: 12px;
+    color: var(--text-light);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.source-score {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary-blue);
+    margin-top: 4px;
+}
+
+.source-link {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--primary-blue);
+    text-decoration: none;
+}
+
+.source-link:hover {
+    text-decoration: underline;
+}
+
+.source-snippet {
+    background: rgba(16, 58, 113, 0.05);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text-dark);
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
 /* Metric Pills */
 .metric-row {
     display: flex;
@@ -402,6 +763,12 @@ CUSTOM_CSS = """
     color: var(--text-dark);
 }
 
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+    color: var(--text-light);
+    opacity: 0.9;
+}
+
 .stTextInput input:focus, .stTextArea textarea:focus {
     border-color: var(--primary-blue);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
@@ -415,6 +782,24 @@ CUSTOM_CSS = """
 /* Radio Buttons */
 .stRadio > div {
     gap: 16px;
+}
+
+.stRadio label {
+    color: var(--text-dark) !important;
+    font-weight: 500;
+}
+
+.stTextArea label,
+.stTextInput label,
+.stSelectbox label,
+.stForm label {
+    color: var(--text-dark) !important;
+    font-weight: 500;
+}
+
+small[data-testid="stCaption"],
+span[data-testid="stCaption"] {
+    color: var(--text-medium) !important;
 }
 
 /* Expander */
@@ -439,11 +824,11 @@ CUSTOM_CSS = """
     .hero-section h2 {
         font-size: 28px;
     }
-
+    
     .stats-container {
         flex-direction: column;
     }
-
+    
     .stat-box {
         width: 100%;
     }
@@ -528,6 +913,7 @@ inject_global_styles()
 # Header
 logo_b64 = load_logo_b64()
 logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="logo-img" alt="TuniSpeak"/>' if logo_b64 else '💬'
+
 st.markdown(
     f"""
     <div class="app-header">
@@ -572,6 +958,28 @@ with col3:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+st.markdown("### ⚙️ Niveaux de complexité")
+complexity_keys = list(COMPLEXITY_LEVELS.keys())
+default_complexity = st.session_state.get("complexity_level", DEFAULT_COMPLEXITY)
+default_index = (
+    complexity_keys.index(default_complexity)
+    if default_complexity in complexity_keys
+    else 0
+)
+selected_complexity = st.radio(
+    "Sélectionnez le niveau de réponse souhaité",
+    options=complexity_keys,
+    index=default_index,
+    horizontal=True,
+    format_func=lambda key: COMPLEXITY_LEVELS[key]["label"],
+)
+st.session_state["complexity_level"] = selected_complexity
+render_complexity_static_overview(selected_complexity)
+complexity_config = COMPLEXITY_LEVELS[selected_complexity]
+st.caption(f"Mode actif : {complexity_config['label']} · {complexity_config['description']}")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
 # Sidebar examples
 with st.sidebar:
     st.markdown(
@@ -592,7 +1000,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # API Setup
 api_host = DEFAULT_API_URL
-top_k = 5
+top_k = complexity_config["top_k"]
 api_base = build_api_base(api_host)
 
 QA_ENDPOINT = f"{api_base}/qa/answer"
@@ -614,593 +1022,292 @@ with tab_text:
         label_visibility="collapsed",
     )
 
-    if st.button("🔍 Obtenir une réponse", type="primary", use_container_width=True):
-        if not question or len(question.strip()) < 3:
+    answer_clicked = st.button("🔍 Obtenir une réponse", type="primary", use_container_width=True)
+    compare_clicked = st.button("📊 Comparer tous les niveaux", use_container_width=True)
+
+    if answer_clicked:
+        question_clean = question.strip() if question else ""
+        if len(question_clean) < 3:
             st.warning("⚠️ Veuillez formuler une question plus précise (minimum 3 caractères).")
         else:
-            with st.spinner("🔄 Recherche en cours..."):
+            with st.spinner(f"{complexity_config['label']} · génération en cours..."):
+                results_by_level: dict[str, dict[str, Any]] = {}
                 try:
-                    payload = {"question": question.strip(), "top_k": top_k}
-                    result = call_api(QA_ENDPOINT, payload)
-                    st.session_state["result"] = result
-                    st.session_state["feedback_sent"] = False
+                    entry = evaluate_complexity_level(
+                        QA_ENDPOINT,
+                        question_clean,
+                        selected_complexity,
+                        complexity_config,
+                    )
+                    results_by_level[selected_complexity] = entry
                 except httpx.HTTPStatusError as exc:
-                    st.error(f"❌ Erreur API ({exc.response.status_code}): {exc.response.text}")
+                    results_by_level[selected_complexity] = {
+                        "ok": False,
+                        "error": f"HTTP {exc.response.status_code}",
+                        "details": exc.response.text,
+                    }
                 except httpx.RequestError as exc:
-                    st.error(f"❌ Impossible de se connecter à l'API: {exc}")
+                    results_by_level[selected_complexity] = {
+                        "ok": False,
+                        "error": "Connexion API",
+                        "details": str(exc),
+                    }
 
-    result = st.session_state.get("result")
+            st.session_state["results_by_level"] = results_by_level
+            st.session_state["selected_question"] = question_clean
+
+    if compare_clicked:
+        question_clean = question.strip() if question else ""
+        if len(question_clean) < 3:
+            st.warning("⚠️ Veuillez formuler une question plus précise (minimum 3 caractères).")
+        else:
+            total_levels = len(COMPLEXITY_LEVELS)
+            progress_text = st.empty()
+            progress_bar = st.progress(0)
+            results_by_level: dict[str, dict[str, Any]] = {}
+
+            with httpx.Client(timeout=30) as shared_client:
+                for idx, (level_key, level_cfg) in enumerate(COMPLEXITY_LEVELS.items(), start=1):
+                    progress_text.info(
+                        f"{level_cfg['label']} · exécution ({idx}/{total_levels})"
+                    )
+                    try:
+                        entry = evaluate_complexity_level(
+                            QA_ENDPOINT,
+                            question_clean,
+                            level_key,
+                            level_cfg,
+                            client=shared_client,
+                        )
+                        results_by_level[level_key] = entry
+                    except httpx.HTTPStatusError as exc:
+                        results_by_level[level_key] = {
+                            "ok": False,
+                            "error": f"HTTP {exc.response.status_code}",
+                            "details": exc.response.text,
+                        }
+                    except httpx.RequestError as exc:
+                        results_by_level[level_key] = {
+                            "ok": False,
+                            "error": "Connexion API",
+                            "details": str(exc),
+                        }
+                    progress_bar.progress(idx / total_levels)
+
+            progress_bar.empty()
+            if any(entry.get("ok") for entry in results_by_level.values()):
+                progress_text.success("Comparaison terminée ✅")
+            else:
+                progress_text.warning("Comparaison terminée avec des erreurs")
+            time.sleep(0.4)
+            progress_text.empty()
+
+            st.session_state["results_by_level"] = results_by_level
+            st.session_state["selected_question"] = question_clean
+
+    results_by_level = st.session_state.get("results_by_level")
+    st.markdown("### 📈 Comparaison temps réel")
+    if results_by_level:
+        last_question = st.session_state.get("selected_question")
+        if last_question:
+            st.caption(f'Question analysée : "{last_question}"')
+    available_only = bool(results_by_level) and len(results_by_level) != len(COMPLEXITY_LEVELS)
+    render_complexity_metrics(results_by_level, selected_complexity, available_only=available_only)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    selected_entry = None
+    if results_by_level:
+        selected_entry = results_by_level.get(selected_complexity)
+
+    result_error = None
+    if selected_entry and not selected_entry.get("ok"):
+        result_error = selected_entry.get("error")
+
+    result = selected_entry.get("data") if selected_entry and selected_entry.get("ok") else None
+
+    if result_error:
+        st.error(f"❌ {result_error}. Consultez les autres niveaux pour comparer les résultats.")
+        details = selected_entry.get("details") if selected_entry else None
+        if details:
+            with st.expander("Détails de l'erreur"):
+                st.code(details)
 
     if result:
         st.markdown("---")
         st.markdown("### 📊 Résultats")
+        st.caption(f"{complexity_config['label']} · {complexity_config['description']}")
 
-        # Metrics
-        metric_col1, metric_col2, metric_col3 = st.columns(3)
-
-        with metric_col1:
-            lang = result.get('language', 'N/A').upper()
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value">{lang}</span><span class="pill-label">Langue détectée</span></div>',
-                unsafe_allow_html=True,
-            )
-
-        with metric_col2:
-            confidence = result.get("confidence")
-            conf_text = f"{confidence*100:.1f}%" if isinstance(confidence, (int, float)) else "N/A"
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value">{conf_text}</span><span class="pill-label">Confiance</span></div>',
-                unsafe_allow_html=True,
-            )
-
-        with metric_col3:
-            normalized = result.get("normalized_query", "—")[:30] + "..." if len(result.get("normalized_query", "")) > 30 else result.get("normalized_query", "—")
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value" style="font-size: 14px;">{html.escape(normalized)}</span><span class="pill-label">Requête normalisée</span></div>',
-                unsafe_allow_html=True,
-            )
-
-        # Answer
-        st.markdown("### 💬 Réponse")
-        answer_text = result.get('answer') or 'Aucune réponse disponible'
-        st.markdown(
-            f'<div class="answer-box">{html.escape(answer_text)}</div>',
-            unsafe_allow_html=True,
-        )
-
-        if result.get("abstain"):
-            st.warning(f"⚠️ {result.get('reason', 'Réponse fournie avec prudence.')}")
-
-        # Sources
-        with st.expander("📚 Sources utilisées", expanded=True):
-            render_sources(result.get("sources", []))
-
-        # Feedback
-        interaction_id = result.get("interaction_id")
-        if interaction_id and not st.session_state.get("feedback_sent"):
-            st.markdown("---")
-            st.markdown("### 📝 Votre avis")
-
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                rating = st.radio(
-                    "Cette réponse vous a-t-elle aidé ?",
-                    ("helpful", "unhelpful"),
-                    format_func=lambda x: "👍 Oui" if x == "helpful" else "👎 Non",
-                    label_visibility="collapsed",
-                )
-
-            comment = st.text_area("Commentaire (optionnel)", height=80)
-            correction = st.text_area("Suggestion de réponse (optionnel)", height=80)
-
-            if st.button("📤 Envoyer le feedback", use_container_width=True):
-                payload = {
-                    "interaction_id": interaction_id,
-                    "rating": rating,
-                    "comment": comment.strip() or None,
-                    "correction": correction.strip() or None,
-                }
-                with st.spinner("Envoi en cours..."):
-                    try:
-                        send_feedback(FEEDBACK_ENDPOINT, payload)
-                        st.success("✅ Merci pour votre retour !")
-                        st.session_state["feedback_sent"] = True
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"❌ Erreur: {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"❌ Connexion impossible: {exc}")
-
-# Voice Mode
-with tab_voice:
-    ensure_voice_state()
-
-    st.markdown("### 🎤 Assistant vocal")
-    st.info("Cliquez sur **Start** pour commencer l'enregistrement, puis utilisez le bouton ci-dessous pour envoyer votre question.")
-    webrtc_ctx = webrtc_streamer(
-        key="voice-chat",
-        mode=WebRtcMode.SENDONLY,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=False,
-        rtc_configuration=RTC_CONFIGURATION,
-        audio_receiver_size=1024,
-    )
-
-    if webrtc_ctx.state.playing and webrtc_ctx.audio_receiver:
-        try:
-            audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
-        except queue.Empty:
-            audio_frames = []
-        for audio_frame in audio_frames:
-            _append_audio_frame(audio_frame)
-
-    st.caption(f"⏱️ Durée enregistrée: {_voice_duration_seconds():.1f}s")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Réinitialiser", disabled=not _has_voice_audio(), use_container_width=True):
-            _clear_voice_buffer()
-            st.success("Enregistrement effacé")
-
-    with col2:
-        if st.button("🚀 Envoyer", type="primary", disabled=not _has_voice_audio(), use_container_width=True):
-            audio_bytes = _flush_voice_buffer()
-            if not audio_bytes:
-                st.warning("Aucun audio détecté")
-            else:
-                with st.spinner("Traitement en cours..."):
-                    try:
-                        voice_result = call_voice_api(VOICE_ENDPOINT, audio_bytes, top_k)
-                        history = st.session_state.voice_history
-                        history.insert(0, voice_result)
-                        del history[MAX_VOICE_HISTORY:]
-                        st.success("✅ Réponse reçue !")
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"❌ Erreur: {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"❌ Connexion impossible: {exc}")
-
-    # Voice History
-    history = st.session_state.voice_history
-    if history:
-        st.markdown("---")
-        st.markdown("### 📜 Historique")
-        for idx, entry in enumerate(history):
-            with st.container():
-                st.markdown(f"**Vous:** {entry.get('question', '')}")
-
-                confidence = entry.get("confidence")
-                if isinstance(confidence, (int, float)):
-                    st.caption(f"Confiance: {confidence*100:.1f}%")
-
-                st.markdown(f"**TuniSpeak:** {entry.get('answer', '')}")
-
-                if entry.get("abstain"):
-                    st.warning(f"⚠️ {entry.get('reason', '')}")
-
-                audio_bytes = entry.get("audio_bytes")
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/mp3")
-
-                if entry.get("sources"):
-                    with st.expander("📚 Sources", expanded=False):
-                        render_sources(entry.get("sources", []))
-
-                if idx < len(history) - 1:
-                    st.markdown("---")
-
-# Footer
-st.markdown(
-    """
-    <div class="app-footer">
-        <p>TuniSpeak by FazaAI © 2025 · Propulsé par FastAPI et Streamlit</p>
-        <p style="font-size: 12px; margin-top: 8px;">Assistance multilingue pour les étudiants tunisiens</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-}
-</style>
-"""
-
-
-def inject_global_styles() -> None:
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-
-@st.cache_data
-def load_logo_b64() -> str | None:
-    logo_path = Path(__file__).resolve().parent / "frontend" / "logo.png"
-    if not logo_path.exists():
-        return None
-    data = logo_path.read_bytes()
-    return base64.b64encode(data).decode("utf-8")
-
-
-# Page Configuration
-st.set_page_config(
-    page_title="TuniSpeak - Assistant Q&A Multilingue",
-    page_icon="💬",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-inject_global_styles()
-
-# Header
-logo_b64 = load_logo_b64()
-logo_html = f'<img src="data:image/png;base64,{logo_b64}" class="logo-img" alt="TuniSpeak"/>' if logo_b64 else '💬'
-
-st.markdown(
-    f"""
-    <div class="app-header">
-        {logo_html}
-        <div class="header-text">
-            <h1>TuniSpeak</h1>
-            <p>Assistant Q&A pour les universités tunisiennes</p>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Hero Section
-st.markdown(
-    """
-    <div class="hero-section">
-        <h2>Obtenez des réponses fiables instantanément</h2>
-        <p>Posez vos questions sur les procédures universitaires en français, arabe ou darija. Notre système vous fournit des réponses vérifiées avec sources et niveau de confiance.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Stats
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown(
-        '<div class="stat-box"><span class="stat-value">3</span><span class="stat-label">Langues</span></div>',
-        unsafe_allow_html=True,
-    )
-with col2:
-    st.markdown(
-        '<div class="stat-box"><span class="stat-value">< 2s</span><span class="stat-label">Latence</span></div>',
-        unsafe_allow_html=True,
-    )
-with col3:
-    st.markdown(
-        '<div class="stat-box"><span class="stat-value">24/7</span><span class="stat-label">Disponible</span></div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# Sidebar examples
-with st.sidebar:
-    st.markdown(
-        """
-        <div class="sidebar-card">
-            <h3>💡 Questions fréquentes</h3>
-            <p>Sélectionnez une suggestion pour pré-remplir le champ de question.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.write("")
-    for idx, example in enumerate(EXAMPLES):
-        if st.button(example, key=f"sidebar-example-{idx}", use_container_width=True):
-            st.session_state["question"] = example
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# API Setup
-api_host = DEFAULT_API_URL
-top_k = 5
-api_base = build_api_base(api_host)
-
-QA_ENDPOINT = f"{api_base}/qa/answer"
-FEEDBACK_ENDPOINT = f"{api_base}/feedback"
-VOICE_ENDPOINT = f"{api_base}/qa/voice"
-
-# Main Tabs
-tab_text, tab_voice = st.tabs(["📝 Mode Texte", "🎤 Mode Vocal"])
-
-# Text Mode
-with tab_text:
-    st.markdown("<h3 class='section-title'>Posez votre question</h3>", unsafe_allow_html=True)
-
-    question = st.text_area(
-        "Votre question",
-        key="question",
-        placeholder="Ex: Comment demander une attestation d'inscription ?",
-        height=120,
-        label_visibility="collapsed",
-    )
-
-    if st.button("🔍 Obtenir une réponse", type="primary", use_container_width=True):
-        if not question or len(question.strip()) < 3:
-            st.warning("⚠️ Veuillez formuler une question plus précise (minimum 3 caractères).")
-        else:
-            with st.spinner("🔄 Recherche en cours..."):
->>>>>>> fbdcf7e94654e37743e8e3ff3f62c0606c1cd633
-                try:
-                    payload = {"question": question.strip(), "top_k": top_k}
-                    result = call_api(QA_ENDPOINT, payload)
-                    st.session_state["result"] = result
-                    st.session_state["feedback_sent"] = False
-                except httpx.HTTPStatusError as exc:
-                    st.error(f"❌ Erreur API ({exc.response.status_code}): {exc.response.text}")
-                except httpx.RequestError as exc:
-                    st.error(f"❌ Impossible de se connecter à l'API: {exc}")
-
-    result = st.session_state.get("result")
-
-    if result:
-<<<<<<< HEAD
-        st.subheader("Réponse")
-        badge_cols = st.columns(3)
-        badge_cols[0].metric("Langue détectée", result.get("language", "-"))
+        lang = result.get("language", "N/A").upper()
         confidence = result.get("confidence")
-        badge_cols[1].metric(
-            "Confiance",
-            f"{confidence*100:.1f}%" if isinstance(confidence, (int, float)) else "-",
+        normalized_full = result.get("normalized_query") or "—"
+        normalized_display = (
+            normalized_full[:30] + "..." if len(normalized_full) > 30 else normalized_full
         )
-        normalized = result.get("normalized_query")
-        badge_cols[2].metric("Requête normalisée", normalized or "—")
 
-        st.success(result.get("answer") or "Aucune réponse")
-        if result.get("abstain"):
-            st.warning(result.get("reason") or "Réponse fournie avec prudence.")
+        if complexity_config["show_metrics"]:
+            if complexity_config["show_normalized"]:
+                metric_col1, metric_col2, metric_col3 = st.columns(3)
+            else:
+                metric_col1, metric_col2 = st.columns(2)
 
-        with st.expander("Sources", expanded=True):
-            render_sources(result.get("sources", []))
+            with metric_col1:
+                st.markdown(
+                    f'<div class="metric-pill"><span class="pill-value">{lang}</span><span class="pill-label">Langue détectée</span></div>',
+                    unsafe_allow_html=True,
+                )
 
-        interaction_id = result.get("interaction_id")
-        if interaction_id:
-            st.divider()
-            st.subheader("Feedback")
-            rating = st.radio(
-                "La réponse vous a-t-elle aidé ?",
-                ("helpful", "unhelpful"),
-                format_func=lambda x: "👍 Oui" if x == "helpful" else "👎 Non",
-                horizontal=True,
-            )
-            comment = st.text_area("Commentaire (optionnel)", key="feedback_comment", height=80)
-            correction = st.text_area("Réponse attendue (optionnel)", key="feedback_correction", height=80)
-            if st.button("Envoyer le feedback") and not st.session_state.get("feedback_sent"):
-=======
-        st.markdown("---")
-        st.markdown("### 📊 Résultats")
-        
-        # Metrics
-        metric_col1, metric_col2, metric_col3 = st.columns(3)
-        
-        with metric_col1:
-            lang = result.get('language', 'N/A').upper()
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value">{lang}</span><span class="pill-label">Langue détectée</span></div>',
-                unsafe_allow_html=True,
-            )
-        
-        with metric_col2:
-            confidence = result.get("confidence")
-            conf_text = f"{confidence*100:.1f}%" if isinstance(confidence, (int, float)) else "N/A"
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value">{conf_text}</span><span class="pill-label">Confiance</span></div>',
-                unsafe_allow_html=True,
-            )
-        
-        with metric_col3:
-            normalized = result.get("normalized_query", "—")[:30] + "..." if len(result.get("normalized_query", "")) > 30 else result.get("normalized_query", "—")
-            st.markdown(
-                f'<div class="metric-pill"><span class="pill-value" style="font-size: 14px;">{html.escape(normalized)}</span><span class="pill-label">Requête normalisée</span></div>',
-                unsafe_allow_html=True,
-            )
+            with metric_col2:
+                conf_text = (
+                    f"{confidence*100:.1f}%" if isinstance(confidence, (int, float)) else "N/A"
+                )
+                st.markdown(
+                    f'<div class="metric-pill"><span class="pill-value">{conf_text}</span><span class="pill-label">Confiance</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+            if complexity_config["show_normalized"]:
+                with metric_col3:
+                    st.markdown(
+                        f'<div class="metric-pill"><span class="pill-value" style="font-size: 14px;">{html.escape(normalized_display)}</span><span class="pill-label">Requête normalisée</span></div>',
+                        unsafe_allow_html=True,
+                    )
+        else:
+            st.caption(f"Langue détectée : {lang}")
+            if isinstance(confidence, (int, float)):
+                st.caption(f"Confiance estimée : {confidence*100:.1f}%")
 
         # Answer
         st.markdown("### 💬 Réponse")
-        answer_text = result.get('answer') or 'Aucune réponse disponible'
+        answer_text = result.get("answer") or "Aucune réponse disponible"
         st.markdown(
             f'<div class="answer-box">{html.escape(answer_text)}</div>',
             unsafe_allow_html=True,
         )
-        
+
         if result.get("abstain"):
             st.warning(f"⚠️ {result.get('reason', 'Réponse fournie avec prudence.')}")
 
-        # Sources
-        with st.expander("📚 Sources utilisées", expanded=True):
-            render_sources(result.get("sources", []))
+        sources = result.get("sources", [])
+        if complexity_config["show_sources"]:
+            sources_to_render = sources
+            max_sources = complexity_config.get("max_sources")
+            if isinstance(max_sources, int) and max_sources > 0:
+                sources_to_render = sources_to_render[:max_sources]
+            with st.expander("📚 Sources utilisées", expanded=bool(sources_to_render)):
+                if sources_to_render:
+                    render_sources(sources_to_render)
+                else:
+                    st.info("Aucune source disponible pour cette réponse.")
+        else:
+            st.caption("Les sources détaillées sont disponibles à partir du niveau Silver.")
 
-        # Feedback
         interaction_id = result.get("interaction_id")
-        if interaction_id and not st.session_state.get("feedback_sent"):
+        if complexity_config["show_feedback"]:
             st.markdown("---")
             st.markdown("### 📝 Votre avis")
-            
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                rating = st.radio(
-                    "Cette réponse vous a-t-elle aidé ?",
-                    ("helpful", "unhelpful"),
-                    format_func=lambda x: "👍 Oui" if x == "helpful" else "👎 Non",
-                    label_visibility="collapsed",
-                )
-            
-            comment = st.text_area("Commentaire (optionnel)", height=80)
-            correction = st.text_area("Suggestion de réponse (optionnel)", height=80)
-            
-            if st.button("📤 Envoyer le feedback", use_container_width=True):
->>>>>>> fbdcf7e94654e37743e8e3ff3f62c0606c1cd633
-                payload = {
-                    "interaction_id": interaction_id,
-                    "rating": rating,
-                    "comment": comment.strip() or None,
-                    "correction": correction.strip() or None,
-                }
-<<<<<<< HEAD
-                with st.spinner("Envoi du feedback..."):
-                    try:
-                        send_feedback(FEEDBACK_ENDPOINT, payload)
-                        st.success("Merci ! Votre feedback a été enregistré.")
-                        st.session_state["feedback_sent"] = True
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"Erreur API ({exc.response.status_code}) : {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"Connexion impossible : {exc}")
-
-with tab_voice:
-    ensure_voice_state()
-
-    st.subheader("Communication vocale")
-    st.write(
-        "Cliquez sur *Start* puis posez votre question. Lorsque vous avez terminé,"
-        " utilisez le bouton ci-dessous pour envoyer la capture audio."
-    )
-=======
-                with st.spinner("Envoi en cours..."):
-                    try:
-                        send_feedback(FEEDBACK_ENDPOINT, payload)
-                        st.success("✅ Merci pour votre retour !")
-                        st.session_state["feedback_sent"] = True
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"❌ Erreur: {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"❌ Connexion impossible: {exc}")
+            render_feedback_form(
+                endpoint=FEEDBACK_ENDPOINT,
+                interaction_id=interaction_id,
+                form_key=f"text-{selected_complexity}",
+            )
 
 # Voice Mode
 with tab_voice:
-    ensure_voice_state()
+    if not complexity_config["voice_enabled"]:
+        st.info(
+            "L'assistant vocal est disponible au niveau Platinum. Sélectionnez \"Platinum\" dans les niveaux de complexité pour l'activer."
+        )
+    else:
+        ensure_voice_state()
 
-    st.markdown("### 🎤 Assistant vocal")
-    st.info("Cliquez sur **Start** pour commencer l'enregistrement, puis utilisez le bouton ci-dessous pour envoyer votre question.")
->>>>>>> fbdcf7e94654e37743e8e3ff3f62c0606c1cd633
+        st.markdown("### 🎤 Assistant vocal")
+        st.info(
+            "Cliquez sur **Start** pour commencer l'enregistrement, puis utilisez le bouton ci-dessous pour envoyer votre question."
+        )
 
-    webrtc_ctx = webrtc_streamer(
-        key="voice-chat",
-        mode=WebRtcMode.SENDONLY,
-        media_stream_constraints={"audio": True, "video": False},
-        async_processing=False,
-        rtc_configuration=RTC_CONFIGURATION,
-        audio_receiver_size=1024,
-    )
+        webrtc_ctx = webrtc_streamer(
+            key="voice-chat",
+            mode=WebRtcMode.SENDONLY,
+            media_stream_constraints={"audio": True, "video": False},
+            async_processing=False,
+            rtc_configuration=RTC_CONFIGURATION,
+            audio_receiver_size=1024,
+        )
 
-    if webrtc_ctx.state.playing and webrtc_ctx.audio_receiver:
-        try:
-            audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
-        except queue.Empty:
-            audio_frames = []
-        for audio_frame in audio_frames:
-            _append_audio_frame(audio_frame)
+        if webrtc_ctx.state.playing and webrtc_ctx.audio_receiver:
+            try:
+                audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+            except queue.Empty:
+                audio_frames = []
+            for audio_frame in audio_frames:
+                _append_audio_frame(audio_frame)
 
-<<<<<<< HEAD
-    st.caption(
-        f"Durée capturée : {_voice_duration_seconds():.1f} s"
-        f" · État WebRTC : {webrtc_ctx.state}"
-    )
-    if webrtc_ctx.state.playing and not webrtc_ctx.audio_receiver:
-        st.info("Connexion audio en cours… autorisez le micro dans votre navigateur.")
+        st.caption(f"⏱️ Durée enregistrée: {_voice_duration_seconds():.1f}s")
 
-    col_left, col_right = st.columns(2)
-    with col_left:
-        if st.button("Réinitialiser la capture", disabled=not _has_voice_audio()):
-            _clear_voice_buffer()
-            st.info("Capture audio effacée.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Réinitialiser", disabled=not _has_voice_audio(), use_container_width=True):
+                _clear_voice_buffer()
+                st.success("Enregistrement effacé")
 
-    with col_right:
-        disabled = not _has_voice_audio()
-        if st.button("Envoyer la question audio", type="primary", disabled=disabled):
-            audio_bytes = _flush_voice_buffer()
-            if not audio_bytes:
-                st.warning("Aucune capture audio détectée.")
-            else:
-                with st.spinner("Transcription et réponse en cours..."):
-                    try:
-                        voice_result = call_voice_api(VOICE_ENDPOINT, audio_bytes, top_k)
-                        history: list[dict[str, Any]] = st.session_state.voice_history
-                        history.insert(0, voice_result)
-                        del history[MAX_VOICE_HISTORY:]
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"Erreur API ({exc.response.status_code}) : {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"Connexion impossible : {exc}")
+        with col2:
+            if st.button(
+                "🚀 Envoyer",
+                type="primary",
+                disabled=not _has_voice_audio(),
+                use_container_width=True,
+            ):
+                audio_bytes = _flush_voice_buffer()
+                if not audio_bytes:
+                    st.warning("Aucun audio détecté")
+                else:
+                    with st.spinner("Traitement en cours..."):
+                        try:
+                            voice_result = call_voice_api(VOICE_ENDPOINT, audio_bytes, top_k)
+                            history = st.session_state.voice_history
+                            history.insert(0, voice_result)
+                            del history[MAX_VOICE_HISTORY:]
+                            st.success("✅ Réponse reçue !")
+                        except httpx.HTTPStatusError as exc:
+                            st.error(f"❌ Erreur: {exc.response.text}")
+                        except httpx.RequestError as exc:
+                            st.error(f"❌ Connexion impossible: {exc}")
 
-    history = st.session_state.voice_history
-    if history:
-        st.markdown("---")
-        st.subheader("Historique vocal")
-        for entry in history:
-            st.markdown(f"**Vous :** {entry.get('question', '')}")
-            confidence = entry.get("confidence")
-            if isinstance(confidence, (int, float)):
-                st.caption(f"Confiance : {confidence*100:.1f}%")
-            st.markdown(f"**TuniSpeak :** {entry.get('answer', '')}")
-            if entry.get("abstain"):
-                st.warning(entry.get("reason") or "Réponse fournie avec prudence.")
-            audio_bytes = entry.get("audio_bytes")
-            if audio_bytes:
-                st.audio(audio_bytes, format="audio/mp3")
-            if entry.get("sources"):
-                with st.expander("Sources", expanded=False):
-                    render_sources(entry.get("sources", []))
-            st.divider()
+        history = st.session_state.voice_history
+        if history:
+            st.markdown("---")
+            st.markdown("### 📜 Historique")
+            for idx, entry in enumerate(history):
+                with st.container():
+                    st.markdown(f"**Vous:** {entry.get('question', '')}")
 
-st.markdown("---")
-st.caption("Déployé avec Streamlit · Backend FastAPI TuniSpeak")
-=======
-    st.caption(f"⏱️ Durée enregistrée: {_voice_duration_seconds():.1f}s")
+                    confidence = entry.get("confidence")
+                    if isinstance(confidence, (int, float)):
+                        st.caption(f"Confiance: {confidence*100:.1f}%")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Réinitialiser", disabled=not _has_voice_audio(), use_container_width=True):
-            _clear_voice_buffer()
-            st.success("Enregistrement effacé")
+                    st.markdown(f"**TuniSpeak:** {entry.get('answer', '')}")
 
-    with col2:
-        if st.button("🚀 Envoyer", type="primary", disabled=not _has_voice_audio(), use_container_width=True):
-            audio_bytes = _flush_voice_buffer()
-            if not audio_bytes:
-                st.warning("Aucun audio détecté")
-            else:
-                with st.spinner("Traitement en cours..."):
-                    try:
-                        voice_result = call_voice_api(VOICE_ENDPOINT, audio_bytes, top_k)
-                        history = st.session_state.voice_history
-                        history.insert(0, voice_result)
-                        del history[MAX_VOICE_HISTORY:]
-                        st.success("✅ Réponse reçue !")
-                    except httpx.HTTPStatusError as exc:
-                        st.error(f"❌ Erreur: {exc.response.text}")
-                    except httpx.RequestError as exc:
-                        st.error(f"❌ Connexion impossible: {exc}")
+                    if entry.get("abstain"):
+                        st.warning(f"⚠️ {entry.get('reason', '')}")
 
-    # Voice History
-    history = st.session_state.voice_history
-    if history:
-        st.markdown("---")
-        st.markdown("### 📜 Historique")
-        for idx, entry in enumerate(history):
-            with st.container():
-                st.markdown(f"**Vous:** {entry.get('question', '')}")
-                
-                confidence = entry.get("confidence")
-                if isinstance(confidence, (int, float)):
-                    st.caption(f"Confiance: {confidence*100:.1f}%")
-                
-                st.markdown(f"**TuniSpeak:** {entry.get('answer', '')}")
-                
-                if entry.get("abstain"):
-                    st.warning(f"⚠️ {entry.get('reason', '')}")
-                
-                audio_bytes = entry.get("audio_bytes")
-                if audio_bytes:
-                    st.audio(audio_bytes, format="audio/mp3")
-                
-                if entry.get("sources"):
-                    with st.expander("📚 Sources", expanded=False):
-                        render_sources(entry.get("sources", []))
-                
-                if idx < len(history) - 1:
-                    st.markdown("---")
+                    audio_bytes = entry.get("audio_bytes")
+                    if audio_bytes:
+                        st.audio(audio_bytes, format="audio/mp3")
+
+                    if entry.get("sources"):
+                        with st.expander("📚 Sources", expanded=False):
+                            render_sources(entry.get("sources", []))
+
+                    if entry.get("interaction_id"):
+                        with st.expander("📝 Donner votre avis", expanded=False):
+                            render_feedback_form(
+                                endpoint=FEEDBACK_ENDPOINT,
+                                interaction_id=entry.get("interaction_id"),
+                                form_key=f"voice-{idx}",
+                            )
+
+                    if idx < len(history) - 1:
+                        st.markdown("---")
 
 # Footer
 st.markdown(
@@ -1212,4 +1319,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
->>>>>>> fbdcf7e94654e37743e8e3ff3f62c0606c1cd633

@@ -1,0 +1,246 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{color}
+\geometry{margin=1in}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0pt}
+\onehalfspacing
+
+\definecolor{listinggray}{gray}{0.95}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{listinggray},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible
+}
+
+\begin{document}
+
+\begin{titlepage}
+    \newgeometry{margin=0pt}
+    \noindent\includegraphics[width=\paperwidth,height=\paperheight]{pagedegardeNLP.png}
+    \restoregeometry
+\end{titlepage}
+
+\begin{titlepage}
+    \centering
+    {\Huge Final Report\\TuniSpeak RAG Assistant\\[0.35cm]}
+    {\Large CRISP-DM Project Overview}\vfill
+    {\large TuniSpeak Team\\December 2025}\vfill
+    {\footnotesize Internal document -- restricted circulation}\vspace*{0.6cm}
+\end{titlepage}
+
+\thispagestyle{empty}
+\tableofcontents
+\newpage
+
+\section*{Executive Summary}
+TuniSpeak is a trilingual (French, Modern Standard Arabic, Tunisian Darija) question-answering assistant for Tunisian universities. The system combines a FastAPI backend, a Streamlit comparison dashboard, a hybrid Retrieval-Augmented Generation (RAG) pipeline, and an optional voice interface. This report follows the CRISP-DM methodology and reflects the state of repository \texttt{TuniSpeak} (branch \texttt{main}) as of 9 December 2025.
+
+\begin{itemize}
+    \item FAQ corpora in \texttt{data/faq/} produce 3\,343 curated knowledge chunks (\texttt{data/processed/chunks.jsonl}).
+    \item Hybrid retrieval fuses BM25 with multilingual sentence-transformer embeddings and an optional CrossEncoder reranker.
+    \item Answers originate from \texttt{deepset/xlm-roberta-base-squad2}; TinyLlama LoRA adapters polish responses when enabled.
+    \item The Streamlit UI exposes Bronze/Silver/Gold/Platinum modes to compare retrieval depth, metadata, feedback, and voice capabilities.
+    \item Latest automated evaluation (\texttt{data/processed/eval/evaluation\_summary.json}) reports EM 0.479, F1 0.674, Recall@5 0.969, nDCG@5 0.767, abstention 0.021, and ECE 0.127.
+\end{itemize}
+
+\section{Business Understanding}
+\subsection{Stakeholders and Objectives}
+Key stakeholders include student services teams, university leadership, and enrolled students. The project aims to deliver 24/7 multilingual guidance, reduce repetitive ticket volume, and log feedback to drive continuous improvement.
+
+\subsection{Pain Points}
+Help desks experience seasonal backlogs, particularly during enrolment and scholarship periods. Darija queries often lack written resources, forcing manual support. Students expect immediate, reliable answers with clear provenance.
+
+\subsection{Success Criteria}
+\begin{itemize}
+    \item Production endpoint availability via \texttt{poetry run tunispeak-api} under campus infrastructure constraints.
+    \item Recall@5 \geq 0.95 while keeping abstention below 3\% for risk-aware responses.
+    \item Comprehensive telemetry in \texttt{data/processed/eval/history.jsonl} and feedback capture through \texttt{/api/v1/feedback}.
+    \item Ability to audit responses with citations and confidence scores across all UI modes.
+\end{itemize}
+
+\section{Data Understanding}
+\subsection{Source Inventory}
+\begin{itemize}
+    \item \texttt{data/faq/dataset\_finetune.jsonl}: 1\,117 dialogues (434 French, 372 Arabic, 311 Darija/Arabizi).
+    \item \texttt{data/faq/mini\_faq.jsonl}: 48 curated QA pairs for rapid evaluation cycles.
+    \item \texttt{data/raw/}: official documents (PDF, DOCX, TXT) ingested during initial runs.
+    \item User feedback: \texttt{data/feedback/feedback.jsonl} storing helpful/unhelpful votes and suggested revisions.
+\end{itemize}
+
+\subsection{Ingestion Overview}
+The Typer CLI \texttt{poetry run tunispeak-ingest run <folder>} triggers \texttt{DocumentIngestionService}. Supported formats include \texttt{.jsonl}, \texttt{.json}, \texttt{.pdf}, \texttt{.docx}, \texttt{.txt}, and \texttt{.md}. Each document is segmented, language-detected, and written to \texttt{data/processed/chunks.jsonl}. Canonical language mapping collapses Tunisian Darija variants to the ISO code \texttt{aeb}, ensuring consistent downstream processing.
+
+\begin{lstlisting}[language=Python,caption={Chunk staging inside DocumentIngestionService}]
+def _stage_chunk(self, path: Path, index: int, chunk_text: str) -> None:
+    chunk_text = chunk_text.strip()
+    if not chunk_text:
+        return
+    detection = self.detector.detect(chunk_text)
+    record = {
+        "document_id": path.stem,
+        "chunk_id": f"{path.stem}-{index:04d}",
+        "text": chunk_text,
+        "language": detection.language,
+        "normalized_text": detection.normalized,
+        "source_path": str(path.resolve()),
+    }
+    self.buffer.append(record)
+\end{lstlisting}
+
+\subsection{Language Detection}
+\texttt{LanguageDetector} in \texttt{app/services/language.py} combines script heuristics, Arabizi markers, and \texttt{langdetect}. New tokens such as \textit{chnoa}, \textit{bach}, and \textit{lazimni} resolve previous 422 errors for romanised Darija queries.
+
+\subsection{Dataset Snapshot}
+\begin{longtable}{>{\raggedright\arraybackslash}p{5cm} >{\raggedright\arraybackslash}p{9cm}}
+\toprule
+Statistic & Value \\
+\midrule
+Chunks in \texttt{data/processed/chunks.jsonl} & 3\,343 \\
+Language distribution & \texttt{aeb}: 2\,914; \texttt{fr}: 426; \texttt{ar}: 2; other: 1 \\
+Principal documents & \texttt{dataset\_finetune} (1\,117); \texttt{dataset\_final\_universite\_tunisie} (1\,082); \texttt{mini\_faq} (48) \\
+\bottomrule
+\end{longtable}
+
+\section{Data Preparation}
+\subsection{Cleaning and Normalisation}
+Ingestion trims whitespace, removes empty segments, normalises Darija tokens, and standardises language codes. For romanised Darija, \texttt{normalize\_darija} unifies common spellings (e.g., \texttt{ch} \textrightarrow{} \texttt{sh}, \texttt{bech} \textrightarrow{} \texttt{bash}). Each chunk stores both raw and normalised text, enabling search over consistent representations.
+
+\subsection{Quality Controls}
+\begin{itemize}
+    \item Empty or non-text documents emit warnings for operator review.
+    \item Flushing rehydrates chunks to keep ingestion idempotent across runs.
+    \item Telemetry and feedback rely on JSON Lines for easy streaming into dashboards.
+\end{itemize}
+
+\subsection{Feature Preparation}
+\texttt{scripts/build\_hybrid\_index.py} builds BM25 statistics and dense embeddings. The dense encoder defaults to \texttt{sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}; embeddings are persisted alongside a pickled BM25 model for reproducibility.
+
+\section{Modeling}
+\subsection{RAG Pipeline}
+\texttt{QAPipeline} orchestrates four stages:
+\begin{enumerate}[label=\textbf{\alph*)}]
+    \item Language detection to normalise the query and bias retrieval toward the requester's language.
+    \item Hybrid retrieval combining BM25 and dense cosine scores with optional CrossEncoder reranking.
+    \item Extractive QA powered by \texttt{deepset/xlm-roberta-base-squad2} with language-specific confidence thresholds and abstention overrides.
+    \item Optional answer synthesis via TinyLlama LoRA adapters to improve fluency while preserving citations.
+\end{enumerate}
+
+\subsection{Complexity Modes}
+The Streamlit UI queries the same API endpoint with differing parameters:
+\begin{itemize}
+    \item Bronze: \texttt{top\_k=3}, no metrics or sources.
+    \item Silver: \texttt{top\_k=5}, displays detected language, confidence, and up to three citations.
+    \item Gold: \texttt{top\_k=7}, adds the normalised query and in-app feedback form.
+    \item Platinum: \texttt{top\_k=10}, removes citation limits and unlocks speech (WebRTC + Faster-Whisper + gTTS).
+\end{itemize}
+
+\subsection{Speech Stack}
+\texttt{SpeechService} leverages Faster-Whisper (model size ``small'') for transcription and gTTS for synthesis. The \texttt{/api/v1/qa/voice} route returns both the textual answer and base64-encoded MP3 audio for playback in the Platinum UI.
+
+\section{Evaluation}
+\subsection{Aggregate Metrics}
+\begin{table}[h]
+    \centering
+    \begin{tabular}{lc}
+        \toprule
+        Indicator & Value \\
+        \midrule
+        Exact Match (EM) & 0.479 \\
+        F1 & 0.674 \\
+        Recall@5 & 0.969 \\
+        nDCG@5 & 0.767 \\
+        Abstention rate & 0.021 \\
+        Expected Calibration Error (ECE) & 0.127 \\
+        Brier score & 0.993 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Extracted from \texttt{data/processed/eval/evaluation\_summary.json}}
+\end{table}
+
+High recall confirms the hybrid retriever surfaces relevant evidence. Lower EM indicates paraphrasing differences and limited Darija coverage. ECE above 0.1 highlights calibration improvements as a follow-up action.
+
+\subsection{Representative Error}
+\begin{itemize}
+    \item Query: ``شنية الاجراءات باش نبدل الشعبة متاعي؟''
+    \item Prediction: generic guidance lacking document-specific steps.
+    \item Mitigation: extend \texttt{dataset\_final\_universite\_tunisie.json} with programme-change procedures.
+\end{itemize}
+
+\section{Deployment}
+\subsection{Runtime Components}
+\begin{itemize}
+    \item FastAPI + Uvicorn launched via \texttt{poetry run tunispeak-api}.
+    \item Streamlit UI via \texttt{poetry run streamlit run streamlit\_app.py}.
+    \item Telemetry logging in \texttt{data/processed/eval/history.jsonl} with \texttt{TelemetryLogger}.
+    \item Feedback persisted by \texttt{/api/v1/feedback} into \texttt{data/feedback/feedback.jsonl}.
+\end{itemize}
+
+\subsection{Operational Scripts}
+\begin{longtable}{>{\raggedright\arraybackslash}p{4cm} >{\raggedright\arraybackslash}p{10cm}}
+\toprule
+Command & Purpose \\
+\midrule
+\texttt{poetry run tunispeak-ingest run data/faq} & Refresh chunks from FAQ corpora. \\
+\texttt{poetry run tunispeak-index} & Build BM25 and dense indices. \\
+\texttt{poetry run tunispeak-eval --dataset data/faq/mini\_faq.jsonl} & Produce evaluation summary. \\
+\texttt{poetry run tunispeak-api} & Start the FastAPI service. \\
+\texttt{poetry run streamlit run streamlit\_app.py} & Launch the comparison interface. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Limitations and Next Steps}
+\begin{itemize}
+    \item Darija coverage remains skewed: only two Arabic-script chunks and 426 French chunks versus 2\,914 Darija entries; prioritise additional Arabic sources.
+    \item Calibration requires temperature scaling or isotonic regression to reduce ECE below 0.1.
+    \item Monitoring lacks Prometheus or OpenTelemetry exporters for production observability.
+    \item CI/CD pipelines are absent; integrate tests and lint checks into GitHub Actions.
+\end{itemize}
+
+\section{Conclusion}
+TuniSpeak delivers a targeted RAG assistant: hybrid retrieval, multilingual normalisation, evidence-backed answers, and a progressive UI with speech support. The system already offers strong recall and logging foundations. Future work should expand Darija resources, improve calibration, and add observability tooling for production deployment.
+
+\appendix
+\section{Key Configuration (excerpt from \texttt{app/core/config.py})}
+\begin{lstlisting}[language=Python]
+class Settings(BaseSettings):
+    dense_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    cross_encoder_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    qa_model = "deepset/xlm-roberta-base-squad2"
+    qa_confidence_threshold = 0.15
+    qa_language_thresholds = {"fr": 0.05, "ar": 0.02, "aeb": 0.005}
+    speech_model_size = "small"
+    speech_enable_tts = True
+    telemetry_log_path = "./data/processed/eval/history.jsonl"
+    feedback_log_path = "./data/feedback/feedback.jsonl"
+\end{lstlisting}
+
+\section{Useful Commands}
+\begin{itemize}
+    \item \texttt{poetry run python scripts/ingest\_documents.py run data/raw}
+    \item \texttt{poetry run python scripts/build\_hybrid\_index.py}
+    \item \texttt{poetry run pytest}
+\end{itemize}
+
+\section{Glossary}
+\begin{description}[style=nextline]
+    \item[CRISP-DM] Cross-Industry Standard Process for Data Mining; framework with phases Business Understanding, Data Understanding, Data Preparation, Modeling, Evaluation, Deployment.
+    \item[EM] Exact Match; proportion of answers identical to the reference.
+    \item[ECE] Expected Calibration Error; discrepancy between predicted confidence and empirical accuracy.
+    \item[RAG] Retrieval-Augmented Generation; combines document retrieval with generation.
+    \item[LoRA] Low-Rank Adaptation; parameter-efficient fine-tuning method for large models.
+\end{description}
+
+\end{document}

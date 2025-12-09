@@ -1,3 +1,5 @@
 {"interaction_id": "49ae098d90704837b3bce379eb13bf41", "rating": "unhelpful", "outcome": 0.0, "comment": null, "correction": null, "timestamp": "2025-11-06T21:38:18.206783+00:00"}
 {"interaction_id": "3d2ac0ce12a745ccb67029316ba931f0", "rating": "unhelpful", "outcome": 0.0, "comment": null, "correction": null, "timestamp": "2025-11-14T22:02:40.005329+00:00"}
 {"interaction_id": "3d3592cf20ff481caad170e2b37facc7", "rating": "unhelpful", "outcome": 0.0, "comment": null, "correction": null, "timestamp": "2025-11-19T19:10:27.100118+00:00"}
+{"interaction_id": "8e92f92239494ffea471cd1efd24edaa", "rating": "helpful", "outcome": 1.0, "comment": "bien", "correction": null, "timestamp": "2025-12-09T17:13:01.387652+00:00"}
+{"interaction_id": "49b1f2a4cdaf4da0be21cf1c24be2c3a", "rating": "helpful", "outcome": 1.0, "comment": "merci pour la reponse", "correction": null, "timestamp": "2025-12-09T17:49:37.717622+00:00"}
